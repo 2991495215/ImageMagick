@@ -68,7 +68,7 @@
 #include "MagickCore/option.h"
 #include "MagickCore/pixel.h"
 #include "MagickCore/pixel-accessor.h"
-#include "MagickCore/profile.h"
+#include "MagickCore/profile-private.h"
 #include "MagickCore/property.h"
 #include "MagickCore/quantum-private.h"
 #include "MagickCore/static.h"
@@ -83,13 +83,6 @@
 #endif
 #if defined(MAGICKCORE_ZLIB_DELEGATE)
 #include "zlib.h"
-#endif
-
-/*
-  Define declarations.
-*/
-#if !defined(LZMA_OK)
-#define LZMA_OK  0
 #endif
 
 /*
@@ -1211,17 +1204,23 @@ static Image *ReadMIFFImage(const ImageInfo *image_info,
           length=ReadBlobMSBLong(image);
           if ((length == 0) || ((MagickSizeType) length > GetBlobSize(image)))
             break;
-          profile=AcquireStringInfo(length);
+          profile=AcquireProfileStringInfo(name,length,exception);
           if (profile == (StringInfo *) NULL)
-            break;
-          count=ReadBlob(image,length,GetStringInfoDatum(profile));
-          if (count != (ssize_t) length)
             {
-              profile=DestroyStringInfo(profile);
-              break;
+              count=SeekBlob(image,length,SEEK_CUR);
+              if (count != (ssize_t) length)
+                break;
             }
-          status=SetImageProfile(image,name,profile,exception);
-          profile=DestroyStringInfo(profile);
+          else
+            {
+              count=ReadBlob(image,length,GetStringInfoDatum(profile));
+              if (count != (ssize_t) length)
+                {
+                  profile=DestroyStringInfo(profile);
+                  break;
+                }
+              status=SetImageProfilePrivate(image,profile,exception);
+            }
           if (status == MagickFalse)
             break;
           name=(const char *) GetNextValueInLinkedList(profiles);
@@ -1544,13 +1543,13 @@ static Image *ReadMIFFImage(const ImageInfo *image_info,
                   }
               }
             code=(int) lzma_code(&lzma_info,LZMA_RUN);
-            if ((code != LZMA_OK) && (code != LZMA_STREAM_END))
+            if (code == LZMA_STREAM_END)
+              break;
+            if (code != LZMA_OK)
               {
                 status=MagickFalse;
                 break;
               }
-            if (code == LZMA_STREAM_END)
-              break;
           } while (lzma_info.avail_out != 0);
           extent=ImportQuantumPixels(image,(CacheView *) NULL,quantum_info,
             quantum_type,pixels,exception);
@@ -2421,7 +2420,8 @@ static MagickBooleanType WriteMIFFImage(const ImageInfo *image_info,
               else
                 for (i=0; i < (ssize_t) length; i++)
                 {
-                  if ((value[i] == (int) '{') || (value[i] == (int) '}'))
+                  if ((value[i] == (int) '{') || (value[i] == (int) '}') ||
+                      (value[i] == (int) '\\'))
                     (void) WriteBlobByte(image,'\\');
                   (void) WriteBlobByte(image,(unsigned char) value[i]);
                 }
@@ -2442,7 +2442,7 @@ static MagickBooleanType WriteMIFFImage(const ImageInfo *image_info,
             image->directory);
         (void) WriteBlobByte(image,'\0');
       }
-    if (image->profiles != 0)
+    if (image->profiles != (void *) NULL)
       {
         const char
           *name;

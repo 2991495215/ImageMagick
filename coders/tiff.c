@@ -76,7 +76,7 @@
 #include "MagickCore/property.h"
 #include "MagickCore/quantum.h"
 #include "MagickCore/quantum-private.h"
-#include "MagickCore/profile.h"
+#include "MagickCore/profile-private.h"
 #include "MagickCore/resize.h"
 #include "MagickCore/resource_.h"
 #include "MagickCore/semaphore.h"
@@ -546,24 +546,17 @@ static MagickBooleanType DecodeLabImage(Image *image,ExceptionInfo *exception)
   return(status);
 }
 
-static MagickBooleanType ReadProfile(Image *image,const char *name,
-  const unsigned char *datum,ssize_t length,ExceptionInfo *exception)
+static void ReadProfile(Image *image,const char *name,
+  const unsigned char *datum,uint32 length,ExceptionInfo *exception)
 {
-  MagickBooleanType
-    status;
-
   StringInfo
     *profile;
 
   if (length < 4)
-    return(MagickFalse);
-  profile=BlobToStringInfo(datum,(size_t) length);
-  if (profile == (StringInfo *) NULL)
-    ThrowBinaryException(ResourceLimitError,"MemoryAllocationFailed",
-      image->filename);
-  status=SetImageProfile(image,name,profile,exception);
-  profile=DestroyStringInfo(profile);
-  return(status);
+    return;
+  profile=BlobToProfileStringInfo(name,datum,(size_t) length,
+    exception);
+  (void) SetImageProfilePrivate(image,profile,exception);
 }
 
 #if defined(__cplusplus) || defined(c_plusplus)
@@ -605,28 +598,24 @@ static toff_t TIFFGetBlobSize(thandle_t image)
   return((toff_t) GetBlobSize((Image *) image));
 }
 
-static MagickBooleanType TIFFGetProfiles(TIFF *tiff,Image *image,
+static void TIFFGetProfiles(TIFF *tiff,Image *image,
   ExceptionInfo *exception)
 {
-  MagickBooleanType
-    status;
-
   uint32
     length = 0;
 
   unsigned char
     *profile = (unsigned char *) NULL;
 
-  status=MagickTrue;
 #if defined(TIFFTAG_ICCPROFILE)
   if ((TIFFGetField(tiff,TIFFTAG_ICCPROFILE,&length,&profile) == 1) &&
       (profile != (unsigned char *) NULL))
-    status=ReadProfile(image,"icc",profile,(ssize_t) length,exception);
+    ReadProfile(image,"icc",profile,length,exception);
 #endif
 #if defined(TIFFTAG_PHOTOSHOP)
   if ((TIFFGetField(tiff,TIFFTAG_PHOTOSHOP,&length,&profile) == 1) &&
       (profile != (unsigned char *) NULL))
-    status=ReadProfile(image,"8bim",profile,(ssize_t) length,exception);
+    ReadProfile(image,"8bim",profile,length,exception);
 #endif
 #if defined(TIFFTAG_RICHTIFFIPTC) && (TIFFLIB_VERSION >= 20191103)
   if ((TIFFGetField(tiff,TIFFTAG_RICHTIFFIPTC,&length,&profile) == 1) &&
@@ -641,10 +630,10 @@ static MagickBooleanType TIFFGetProfiles(TIFF *tiff,Image *image,
         {
           if (TIFFIsByteSwapped(tiff) != 0)
             TIFFSwabArrayOfLong((uint32 *) profile,(tmsize_t) length);
-          status=ReadProfile(image,"iptc",profile,4L*length,exception);
+          ReadProfile(image,"iptc",profile,4L*length,exception);
         }
       else
-        status=ReadProfile(image,"iptc",profile,length,exception);
+        ReadProfile(image,"iptc",profile,length,exception);
     }
 #endif
 #if defined(TIFFTAG_XMLPACKET)
@@ -654,7 +643,7 @@ static MagickBooleanType TIFFGetProfiles(TIFF *tiff,Image *image,
       StringInfo
         *dng;
 
-      status=ReadProfile(image,"xmp",profile,(ssize_t) length,exception);
+      ReadProfile(image,"xmp",profile,length,exception);
       dng=BlobToStringInfo(profile,length);
       if (dng != (StringInfo *) NULL)
         {
@@ -669,12 +658,10 @@ static MagickBooleanType TIFFGetProfiles(TIFF *tiff,Image *image,
 #endif
   if ((TIFFGetField(tiff,34118,&length,&profile) == 1) &&
       (profile != (unsigned char *) NULL))
-    status=ReadProfile(image,"tiff:34118",profile,(ssize_t) length,
-      exception);
+    ReadProfile(image,"tiff:34118",profile,length,exception);
   if ((TIFFGetField(tiff,37724,&length,&profile) == 1) &&
       (profile != (unsigned char *) NULL))
-    status=ReadProfile(image,"tiff:37724",profile,(ssize_t) length,exception);
-  return(status);
+    ReadProfile(image,"tiff:37724",profile,length,exception);
 }
 
 static MagickBooleanType TIFFGetProperties(TIFF *tiff,Image *image,
@@ -1480,12 +1467,7 @@ static Image *ReadTIFFImage(const ImageInfo *image_info,
         (compress_tag != COMPRESSION_OJPEG) &&
         (compress_tag != COMPRESSION_JPEG))
       (void) SetImageColorspace(image,YCbCrColorspace,exception);
-    status=TIFFGetProfiles(tiff,image,exception);
-    if (status == MagickFalse)
-      {
-        TIFFClose(tiff);
-        return(DestroyImageList(image));
-      }
+    TIFFGetProfiles(tiff,image,exception);
     status=TIFFGetProperties(tiff,image,exception);
     if (status == MagickFalse)
       {
@@ -1734,7 +1716,7 @@ static Image *ReadTIFFImage(const ImageInfo *image_info,
                   }
             }
             if ((image->alpha_trait == UndefinedPixelTrait) &&
-                 (extra_samples == 1))
+                 (extra_samples >= 1))
               {
                 const char
                   *option;
@@ -1746,7 +1728,10 @@ static Image *ReadTIFFImage(const ImageInfo *image_info,
             if (image->alpha_trait != UndefinedPixelTrait)
               extra_samples--;
             if (extra_samples > 0)
-              (void) SetPixelMetaChannels(image,extra_samples,exception);
+              {
+                if (SetPixelMetaChannels(image,extra_samples,exception) == MagickFalse)
+                  ThrowTIFFException(OptionError,"SetPixelMetaChannelsFailure");
+              }
           }
       }
     if (image->alpha_trait != UndefinedPixelTrait)
@@ -3203,13 +3188,13 @@ static MagickBooleanType TIFFWritePhotoshopLayers(Image* image,
       image->filename);
   profile.offset=0;
   profile.quantum=MagickMinBlobExtent;
-  layers=AcquireStringInfo(profile.quantum);
+  layers=AcquireProfileStringInfo("tiff:37724",profile.quantum,
+    exception);
   if (layers == (StringInfo *) NULL)
     {
       base_image=DestroyImage(base_image);
       clone_info=DestroyImageInfo(clone_info);
-      ThrowBinaryException(ResourceLimitError,"MemoryAllocationFailed",
-        image->filename);
+      return(MagickFalse);
     }
   profile.data=layers;
   profile.extent=layers->length;
@@ -3248,15 +3233,16 @@ static MagickBooleanType TIFFWritePhotoshopLayers(Image* image,
   if (status != MagickFalse)
     {
       SetStringInfoLength(layers,(size_t) profile.offset);
-      status=SetImageProfile(image,"tiff:37724",layers,exception);
+      (void) SetImageProfilePrivate(image,layers,exception);
     }
+  else
+    layers=DestroyStringInfo(layers);
   next=base_image;
   while (next != (Image *) NULL)
   {
     CloseBlob(next);
     next=next->next;
   }
-  layers=DestroyStringInfo(layers);
   clone_info=DestroyImageInfo(clone_info);
   custom_stream=DestroyCustomStreamInfo(custom_stream);
   return(status);

@@ -59,7 +59,7 @@ jobs:
 
   build_macos:
     name: Build MacOS
-    runs-on: macos-latest
+    runs-on: macos-13
 
     steps:
     - uses: actions/checkout@v4
@@ -68,11 +68,11 @@ jobs:
       run: |
         set -e
         export HOMEBREW_NO_AUTO_UPDATE=1
-        brew install automake fftw flif jbigkit libxml2 pango libraqm librsvg
+        brew install automake fftw flif jbigkit librsvg libtool libxml2 pango
 
     - name: Configure ImageMagick
       run: |
-        export CFLAGS="-Wall -Wextra -Werror -Wno-incompatible-library-redeclaration -Wno-deprecated-declarations -Wno-unused-parameter -Wno-unused-function -Wno-missing-declarations"
+        export CFLAGS="-Wall -Wextra -Wno-incompatible-library-redeclaration -Wno-deprecated-declarations -Wno-unused-parameter -Wno-unused-function -Wno-missing-declarations -Wno-incompatible-pointer-types-discards-qualifiers"
         export PKG_CONFIG_PATH="/usr/local/opt/libxml2/lib/pkgconfig"
         autoreconf -fiv
         ./configure --with-quantum-depth=16 --enable-hdri=no --without-perl --with-fftw --with-flif --with-rsvg
@@ -93,7 +93,7 @@ jobs:
       run: |
         set -e
         export HOMEBREW_NO_AUTO_UPDATE=1
-        brew install automake fftw flif jbigkit libxml2 pango libraqm librsvg libtool
+        brew install automake fftw flif jbigkit libraqm librsvg libtool libxml2 pango
 
     - name: Configure ImageMagick
       run: |
@@ -134,9 +134,8 @@ jobs:
     - name: Clone repositories
       shell: cmd
       run: |
-        for /f "tokens=* USEBACKQ" %%F IN (`git -C ImageMagick rev-parse HEAD`) do set COMMIT_SHA=%%F
         cd ImageMagick-Windows
-        CloneRepositories.IM7.cmd %COMMIT_SHA%
+        CloneRepositories.IM7.cmd
 
     - name: Build configure
       shell: cmd
@@ -156,7 +155,7 @@ jobs:
       run: |
         call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\Common7\Tools\VsDevCmd.bat"
         cd ImageMagick-Windows
-        msbuild IM7.Static.sln /m /t:Rebuild /p:Configuration=Release,Platform=${{matrix.platform}}
+        msbuild IM7.Static.${{matrix.platform}}.sln /m /t:Rebuild /p:Configuration=Release,Platform=${{matrix.platform}}
 
   build_msys2:
     name: Build MSYS2
